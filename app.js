@@ -1,81 +1,98 @@
-const AWS = require('@aws-sdk/client-s3');
-const fs = require('fs');
-const { exec } = require('child_process');
-const axios = require('axios');
+const AWS = require("@aws-sdk/client-s3");
+const fs = require("fs");
+const path = require("path");
+const ffmpeg = require("fluent-ffmpeg");
+const axios = require("axios");
 
-// Load environment variables
-const spacesKey = process.env.SPACES_KEY;
-const spacesSecret = process.env.SPACES_SECRET;
-const spacesEndpoint = process.env.SPACES_ENDPOINT || 'nyc3.digitaloceanspaces.com';
-const bucketName = process.env.BUCKET_NAME;
-
+// Initialize S3 client
 const s3 = new AWS.S3({
-    credentials: {
-        accessKeyId: spacesKey,
-        secretAccessKey: spacesSecret
-    },
-    endpoint: `https://${spacesEndpoint}`,
-    region: 'nyc3'
+  endpoint: "https://nyc3.digitaloceanspaces.com",
+  region: "us-east-1",
+  credentials: {
+    accessKeyId: process.env.SPACES_KEY,
+    secretAccessKey: process.env.SPACES_SECRET,
+  },
 });
 
+const bucketName = "audio-uploads-questworks";
+
+// Function to download file from S3
+async function downloadFileFromS3(key) {
+  const params = { Bucket: bucketName, Key: key };
+  const data = await s3.getObject(params);
+  return Buffer.from(await data.Body.transformToByteArray());
+}
+
 // Function to convert MP3 to OGG
-async function convertMp3ToOgg(filePath, outputFilePath) {
-    return new Promise((resolve, reject) => {
-        exec(`ffmpeg -i ${filePath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.1 ${outputFilePath}`, (error) => {
-            if (error) return reject(error);
-            resolve();
-        });
-    });
+async function convertMp3ToOgg(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .audioCodec("libvorbis")
+      .audioQuality(0.1) // Set quality to 0.1 for smaller file size
+      .on("end", () => resolve())
+      .on("error", (err) => reject(err))
+      .save(outputPath);
+  });
 }
 
-// Function to upload to Spaces
-async function uploadToSpaces(fileName, filePath) {
-    const fileContent = fs.readFileSync(filePath);
-    await s3.putObject({
-        Bucket: bucketName,
-        Key: `ogg/${fileName}`,
-        Body: fileContent,
-        ContentType: 'audio/ogg'
-    });
+// Function to upload file to S3
+async function uploadFileToS3(key, filePath) {
+  const fileContent = fs.readFileSync(filePath);
+  const params = {
+    Bucket: bucketName,
+    Key: key,
+    Body: fileContent,
+    ContentType: "audio/ogg",
+  };
+  await s3.putObject(params);
 }
 
-// Main function to check for new MP3 files and convert them
+// Function to check for new files and process them
 async function checkForNewFiles() {
-    console.log('Checking for new MP3 files...');
-    
-    try {
-        const files = await s3.listObjectsV2({ Bucket: bucketName, Prefix: 'mp3/' });
-        if (!files.Contents || files.Contents.length === 0) {
-            console.log('No new MP3 files found.');
-            return;
-        }
+  try {
+    console.log("[audio-processor] Checking for new MP3 files...");
+    const listParams = { Bucket: bucketName, Prefix: "mp3/" };
+    const listResponse = await s3.listObjectsV2(listParams);
 
-        for (const file of files.Contents) {
-            if (file.Key.endsWith('.mp3')) {
-                console.log(`Processing file: ${file.Key}`);
-                const fileName = file.Key.split('/').pop();
-                const tempMp3Path = `/tmp/${fileName}`;
-                const tempOggPath = `/tmp/${fileName.replace('.mp3', '.ogg')}`;
-
-                // Download the MP3
-                const mp3File = await s3.getObject({ Bucket: bucketName, Key: file.Key });
-                fs.writeFileSync(tempMp3Path, mp3File.Body);
-
-                // Convert to OGG
-                console.log(`Converting ${fileName} to OGG...`);
-                await convertMp3ToOgg(tempMp3Path, tempOggPath);
-
-                // Upload the OGG file
-                const oggFileName = fileName.replace('.mp3', '.ogg');
-                console.log(`Uploading ${oggFileName} to Spaces...`);
-                await uploadToSpaces(oggFileName, tempOggPath);
-
-                console.log(`File ${oggFileName} uploaded successfully.`);
-            }
-        }
-    } catch (error) {
-        console.error('Error processing files:', error);
+    if (!listResponse.Contents || listResponse.Contents.length === 0) {
+      console.log("[audio-processor] No new MP3 files found.");
+      return;
     }
+
+    for (const file of listResponse.Contents) {
+      const key = file.Key;
+      if (!key.endsWith(".mp3")) continue;
+
+      console.log(`[audio-processor] Processing file: ${key}`);
+      const fileName = path.basename(key);
+      const inputPath = `/tmp/${fileName}`;
+      const outputFileName = fileName.replace(".mp3", ".ogg");
+      const outputPath = `/tmp/${outputFileName}`;
+
+      // Download the file
+      const fileBuffer = await downloadFileFromS3(key);
+      fs.writeFileSync(inputPath, fileBuffer);
+      console.log(`[audio-processor] Downloaded file: ${fileName}`);
+
+      // Convert to OGG
+      await convertMp3ToOgg(inputPath, outputPath);
+      console.log(`[audio-processor] Converted ${fileName} to ${outputFileName}`);
+
+      // Upload the OGG file to S3
+      await uploadFileToS3(`ogg/${outputFileName}`, outputPath);
+      console.log(`[audio-processor] Uploaded ${outputFileName} to ogg/`);
+
+      // Send a webhook to Zapier
+      await axios.post("https://hooks.zapier.com/hooks/catch/20789352/282fw24/", {
+        filename: outputFileName,
+        url: `https://audio-uploads-questworks.nyc3.digitaloceanspaces.com/ogg/${outputFileName}`,
+      });
+
+      console.log("[audio-processor] Webhook sent to Zapier.");
+    }
+  } catch (err) {
+    console.error("[audio-processor] Error processing files:", err);
+  }
 }
 
 // Run the check every 20 seconds
