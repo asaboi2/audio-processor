@@ -43,6 +43,9 @@ async function checkForNewFiles() {
             return;
         }
 
+        console.log("Files found in /mp3 folder:");
+        data.Contents.forEach(file => console.log(file.Key));
+
         for (const file of data.Contents) {
             const fileName = path.basename(file.Key);
             if (fileName.endsWith('.mp3')) {
@@ -54,13 +57,13 @@ async function checkForNewFiles() {
                     Key: file.Key,
                 }));
 
-                const mp3Buffer = await streamToBuffer(mp3Data.Body);
+                console.log(`Downloaded file: ${fileName}`);
 
-                // Simulate conversion (replace with actual conversion logic)
+                // Simulate conversion
                 const oggFileName = fileName.replace('.mp3', '.ogg');
                 const oggFilePath = path.join(__dirname, oggFileName);
 
-                fs.writeFileSync(oggFilePath, mp3Buffer);
+                fs.writeFileSync(oggFilePath, await streamToBuffer(mp3Data.Body));
 
                 console.log(`Converted ${fileName} to ${oggFileName}`);
 
