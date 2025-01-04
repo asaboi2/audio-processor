@@ -1,14 +1,18 @@
+# Use the official Node.js image
 FROM node:16
 
-# Install FFmpeg
-RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    apt-get clean
-
+# Set the working directory
 WORKDIR /app
-COPY package*.json ./
+
+# Copy package.json and install dependencies
+COPY package.json .
 RUN npm install
+
+# Copy the rest of the application files
 COPY . .
 
+# Expose port 3000
 EXPOSE 3000
+
+# Start the application
 CMD ["node", "app.js"]
