@@ -33,13 +33,11 @@ const streamToBuffer = async (stream) => {
 
 // Function to convert MP3 to OGG using FFmpeg with Vorbis codec
 async function convertToOgg(inputBuffer, outputPath) {
-    // Write the input buffer to a temporary MP3 file
     const tempInputPath = 'temp_input.mp3';
     await writeFile(tempInputPath, inputBuffer);
 
     console.log(`Starting FFmpeg conversion for: ${tempInputPath}`);
 
-    // Use the updated FFmpeg command with lower quality
     const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.5 ${outputPath}`;
 
     return new Promise((resolve, reject) => {
@@ -63,7 +61,7 @@ async function convertToOgg(inputBuffer, outputPath) {
     });
 }
 
-// Function to check for new MP3 files and convert them to OGG
+// Function to continuously check for new MP3 files
 async function checkForNewFiles() {
     console.log("Checking for new MP3 files...");
 
@@ -74,60 +72,56 @@ async function checkForNewFiles() {
             Prefix: inputFolder,
         }));
 
-        if (!data.Contents || data.Contents.length === 0) {
-            console.log("No new files found.");
-            return;
-        }
+        const mp3Files = data.Contents?.filter(file => file.Key.endsWith('.mp3')) || [];
 
-        console.log("Files found in /mp3 folder:");
-        data.Contents
-            .filter(file => file.Key.endsWith('.mp3'))
-            .forEach(file => console.log(file.Key));
+        if (mp3Files.length === 0) {
+            console.log("No new MP3 files found.");
+        } else {
+            console.log("Files found in /mp3 folder:");
+            mp3Files.forEach(file => console.log(file.Key));
 
-        for (const file of data.Contents) {
-            const fileName = path.basename(file.Key);
-            if (fileName.endsWith('.mp3') && !processedFiles.has(file.Key)) {
-                console.log(`Processing file: ${fileName}`);
-                processedFiles.add(file.Key); // Mark file as processed
+            for (const file of mp3Files) {
+                const fileName = path.basename(file.Key);
+                if (!processedFiles.has(file.Key)) {
+                    console.log(`Processing file: ${fileName}`);
+                    processedFiles.add(file.Key);
 
-                // Download the MP3 file from the Space
-                const mp3Data = await s3.send(new GetObjectCommand({
-                    Bucket: bucketName,
-                    Key: file.Key,
-                }));
+                    const mp3Data = await s3.send(new GetObjectCommand({
+                        Bucket: bucketName,
+                        Key: file.Key,
+                    }));
 
-                console.log(`Downloaded file: ${fileName}`);
+                    console.log(`Downloaded file: ${fileName}`);
 
-                // Convert the MP3 to OGG with custom FFmpeg parameters
-                const oggFileName = fileName.replace('.mp3', '.ogg');
-                const oggFilePath = path.join(__dirname, oggFileName);
+                    const oggFileName = fileName.replace('.mp3', '.ogg');
+                    const oggFilePath = path.join(__dirname, oggFileName);
 
-                await convertToOgg(await streamToBuffer(mp3Data.Body), oggFilePath);
+                    await convertToOgg(await streamToBuffer(mp3Data.Body), oggFilePath);
 
-                console.log(`Converted ${fileName} to ${oggFileName}`);
+                    console.log(`Converted ${fileName} to ${oggFileName}`);
 
-                // Upload the OGG file to the output folder in the Space
-                const oggFile = fs.readFileSync(oggFilePath);
-                await s3.send(new PutObjectCommand({
-                    Bucket: bucketName,
-                    Key: `${outputFolder}${oggFileName}`,
-                    Body: oggFile,
-                    ContentType: 'audio/ogg',
-                }));
+                    const oggFile = fs.readFileSync(oggFilePath);
+                    await s3.send(new PutObjectCommand({
+                        Bucket: bucketName,
+                        Key: `${outputFolder}${oggFileName}`,
+                        Body: oggFile,
+                        ContentType: 'audio/ogg',
+                    }));
 
-                console.log(`Uploaded ${oggFileName} to ${outputFolder}`);
+                    console.log(`Uploaded ${oggFileName} to ${outputFolder}`);
 
-                // Clean up the local file
-                fs.unlinkSync(oggFilePath);
+                    fs.unlinkSync(oggFilePath);
+                }
             }
         }
     } catch (err) {
         console.error("Error processing files:", err);
     }
+
+    // Recursive call to keep checking for new files
+    setImmediate(checkForNewFiles);
 }
 
-// Run the function every 5 minutes
-setInterval(checkForNewFiles, 5 * 60 * 1000);
-
-// Run it once on startup
+// Start the continuous file check
 checkForNewFiles();
+
