@@ -1,144 +1,95 @@
-const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
-const fs = require('fs');
-const path = require('path');
-const { exec } = require('child_process');
-const { writeFile } = require('fs').promises;
-const axios = require('axios');
+const AWS = require("@aws-sdk/client-s3");
+const axios = require("axios");
+const fs = require("fs");
+const { exec } = require("child_process");
 
-// Set up Spaces credentials
-const s3 = new S3Client({
-    region: 'nyc3',
-    endpoint: 'https://nyc3.digitaloceanspaces.com',
+// Configuration
+const spacesEndpoint = new AWS.Endpoint("nyc3.digitaloceanspaces.com");
+const s3 = new AWS.S3({
+    endpoint: spacesEndpoint,
+    region: "nyc3",
     credentials: {
         accessKeyId: process.env.SPACES_KEY,
-        secretAccessKey: process.env.SPACES_SECRET,
-    },
+        secretAccessKey: process.env.SPACES_SECRET
+    }
 });
 
-// Folder paths in the Space
-const bucketName = 'audio-uploads-questworks';
-const inputFolder = 'mp3/';
-const outputFolder = 'ogg/';
+const bucketName = "your-space-name";
+const mp3Folder = "mp3";
+const oggFolder = "ogg";
+const webhookUrl = "https://hooks.zapier.com/hooks/catch/20789352/282fw24/";
 
-// Your Zapier webhook URL
-const webhookUrl = 'https://hooks.zapier.com/hooks/catch/20789352/282fw24/';
-
-// In-memory cache to track processed files
-const processedFiles = new Set();
-
-// Function to stream file from Spaces to local
-const streamToBuffer = async (stream) => {
-    const chunks = [];
-    for await (const chunk of stream) {
-        chunks.push(chunk);
-    }
-    return Buffer.concat(chunks);
-};
-
-// Function to convert MP3 to OGG using FFmpeg with Vorbis codec
-async function convertToOgg(inputBuffer, outputPath) {
-    const tempInputPath = 'temp_input.mp3';
-    await writeFile(tempInputPath, inputBuffer);
-
-    console.log(`Starting FFmpeg conversion for: ${tempInputPath}`);
-
-    const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.5 -hide_banner -loglevel warning ${outputPath}`;
-
-    return new Promise((resolve, reject) => {
-        const process = exec(ffmpegCommand, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`FFmpeg error: ${stderr}`);
-                reject(`Conversion failed: ${stderr}`);
-            } else {
-                console.log(`FFmpeg output: ${stdout}`);
-                resolve();
-            }
-        });
-
-        process.stdout.on('data', (data) => {
-            console.log(`FFmpeg Output: ${data}`);
-        });
-
-        process.stderr.on('data', (data) => {
-            console.error(`FFmpeg Warning: ${data}`);
-        });
-    });
-}
-
-// Function to check for new MP3 files every 20 seconds
-async function checkForNewFiles() {
-    console.log("Checking for new MP3 files...");
-
+const checkForNewFiles = async () => {
     try {
-        // List objects in the input folder
-        const data = await s3.send(new ListObjectsV2Command({
-            Bucket: bucketName,
-            Prefix: inputFolder,
-        }));
+        console.log("[audio-processor] Checking for new MP3 files...");
+        const files = await s3.listObjectsV2({ Bucket: bucketName, Prefix: `${mp3Folder}/` });
 
-        const mp3Files = data.Contents?.filter(file => file.Key.endsWith('.mp3')) || [];
+        if (!files.Contents || files.Contents.length === 0) {
+            console.log("[audio-processor] No new MP3 files found.");
+            return;
+        }
 
-        if (mp3Files.length === 0) {
-            console.log("No new MP3 files found.");
-        } else {
-            console.log("Files found in /mp3 folder:");
-            mp3Files.forEach(file => console.log(file.Key));
+        for (const file of files.Contents) {
+            const fileName = file.Key.split("/").pop();
+            if (!fileName.endsWith(".mp3")) continue;
 
-            for (const file of mp3Files) {
-                const fileName = path.basename(file.Key);
-                if (!processedFiles.has(file.Key)) {
-                    console.log(`Processing file: ${fileName}`);
-                    processedFiles.add(file.Key);
+            console.log(`[audio-processor] Processing file: ${fileName}`);
 
-                    const mp3Data = await s3.send(new GetObjectCommand({
-                        Bucket: bucketName,
-                        Key: file.Key,
-                    }));
+            const downloadParams = {
+                Bucket: bucketName,
+                Key: file.Key
+            };
 
-                    console.log(`Downloaded file: ${fileName}`);
+            const downloadPath = `temp_input.mp3`;
+            const uploadPath = `temp_output.ogg`;
 
-                    const oggFileName = fileName.replace('.mp3', '.ogg');
-                    const oggFilePath = path.join(__dirname, oggFileName);
+            const fileData = await s3.getObject(downloadParams);
+            fs.writeFileSync(downloadPath, fileData.Body);
 
-                    await convertToOgg(await streamToBuffer(mp3Data.Body), oggFilePath);
+            console.log(`[audio-processor] Downloaded file: ${fileName}`);
 
-                    console.log(`Converted ${fileName} to ${oggFileName}`);
+            // FFmpeg command to convert MP3 to OGG with high compression
+            const ffmpegCommand = `ffmpeg -i ${downloadPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.1 -hide_banner -loglevel error ${uploadPath}`;
 
-                    // Upload the OGG file to the output folder in the Space
-                    const oggFile = fs.readFileSync(oggFilePath);
-                    await s3.send(new PutObjectCommand({
-                        Bucket: bucketName,
-                        Key: `${outputFolder}${oggFileName}`,
-                        Body: oggFile,
-                        ContentType: 'audio/ogg',
-                    }));
-
-                    console.log(`Uploaded ${oggFileName} to ${outputFolder}`);
-
-                    // Send a POST request to the Zapier webhook with the OGG file
-                    const oggFileBuffer = fs.readFileSync(oggFilePath);
-
-                    await axios.post(webhookUrl, oggFileBuffer, {
-                        headers: {
-                            'Content-Type': 'audio/ogg',
-                            'Content-Disposition': `attachment; filename="${oggFileName}"`,
-                        },
-                    });
-
-                    console.log(`Webhook sent for: ${oggFileName}`);
-
-                    // Clean up the local file
-                    fs.unlinkSync(oggFilePath);
+            exec(ffmpegCommand, async (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`[audio-processor] FFmpeg Error: ${error.message}`);
+                    return;
                 }
-            }
+
+                console.log(`[audio-processor] Converted ${fileName} to OGG`);
+
+                // Upload the OGG file to Spaces
+                const uploadParams = {
+                    Bucket: bucketName,
+                    Key: `${oggFolder}/${fileName.replace(".mp3", ".ogg")}`,
+                    Body: fs.readFileSync(uploadPath),
+                    ContentType: "audio/ogg"
+                };
+
+                await s3.putObject(uploadParams);
+                console.log(`[audio-processor] Uploaded ${fileName.replace(".mp3", ".ogg")} to ${oggFolder}/`);
+
+                // Send webhook to Zapier
+                try {
+                    await axios.post(webhookUrl, {
+                        filename: fileName.replace(".mp3", ".ogg"),
+                        downloadUrl: `https://${bucketName}.${spacesEndpoint.hostname}/${oggFolder}/${fileName.replace(".mp3", ".ogg")}`
+                    });
+                    console.log(`[audio-processor] Webhook sent for: ${fileName.replace(".mp3", ".ogg")}`);
+                } catch (err) {
+                    console.error(`[audio-processor] Error sending webhook: ${err.message}`);
+                }
+
+                // Clean up temporary files
+                fs.unlinkSync(downloadPath);
+                fs.unlinkSync(uploadPath);
+            });
         }
     } catch (err) {
-        console.error("Error processing files:", err);
+        console.error(`[audio-processor] Error processing files: ${err.message}`);
     }
+};
 
-    // Check again in 20 seconds
-    setTimeout(checkForNewFiles, 20000);
-}
-
-// Start the continuous file check
-checkForNewFiles();
+// Run the file check every 20 seconds
+setInterval(checkForNewFiles, 20000);
