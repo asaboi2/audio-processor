@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const { writeFile } = require('fs').promises;
+const axios = require('axios');
 
 // Set up Spaces credentials
 const s3 = new S3Client({
@@ -18,6 +19,9 @@ const s3 = new S3Client({
 const bucketName = 'audio-uploads-questworks';
 const inputFolder = 'mp3/';
 const outputFolder = 'ogg/';
+
+// Your Zapier webhook URL
+const webhookUrl = 'https://hooks.zapier.com/hooks/catch/20789352/282fw24/';
 
 // In-memory cache to track processed files
 const processedFiles = new Set();
@@ -38,7 +42,7 @@ async function convertToOgg(inputBuffer, outputPath) {
 
     console.log(`Starting FFmpeg conversion for: ${tempInputPath}`);
 
-    const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.5 ${outputPath}`;
+    const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.5 -hide_banner -loglevel warning ${outputPath}`;
 
     return new Promise((resolve, reject) => {
         const process = exec(ffmpegCommand, (error, stdout, stderr) => {
@@ -52,16 +56,16 @@ async function convertToOgg(inputBuffer, outputPath) {
         });
 
         process.stdout.on('data', (data) => {
-            console.log(`FFmpeg: ${data}`);
+            console.log(`FFmpeg Output: ${data}`);
         });
 
         process.stderr.on('data', (data) => {
-            console.error(`FFmpeg Error: ${data}`);
+            console.error(`FFmpeg Warning: ${data}`);
         });
     });
 }
 
-// Function to continuously check for new MP3 files
+// Function to check for new MP3 files every 2 hours
 async function checkForNewFiles() {
     console.log("Checking for new MP3 files...");
 
@@ -100,6 +104,7 @@ async function checkForNewFiles() {
 
                     console.log(`Converted ${fileName} to ${oggFileName}`);
 
+                    // Upload the OGG file to the output folder in the Space
                     const oggFile = fs.readFileSync(oggFilePath);
                     await s3.send(new PutObjectCommand({
                         Bucket: bucketName,
@@ -110,6 +115,19 @@ async function checkForNewFiles() {
 
                     console.log(`Uploaded ${oggFileName} to ${outputFolder}`);
 
+                    // Send a POST request to the Zapier webhook with the OGG file
+                    const oggFileBuffer = fs.readFileSync(oggFilePath);
+
+                    await axios.post(webhookUrl, oggFileBuffer, {
+                        headers: {
+                            'Content-Type': 'audio/ogg',
+                            'Content-Disposition': `attachment; filename="${oggFileName}"`,
+                        },
+                    });
+
+                    console.log(`Webhook sent for: ${oggFileName}`);
+
+                    // Clean up the local file
                     fs.unlinkSync(oggFilePath);
                 }
             }
@@ -118,10 +136,10 @@ async function checkForNewFiles() {
         console.error("Error processing files:", err);
     }
 
-    // Recursive call to keep checking for new files
-    setImmediate(checkForNewFiles);
+    // Schedule the next check in 2 hours (7200 seconds)
+    console.log("Next check scheduled in 2 hours...");
+    setTimeout(checkForNewFiles, 2 * 60 * 60 * 1000);
 }
 
-// Start the continuous file check
+// Start the first check
 checkForNewFiles();
-
