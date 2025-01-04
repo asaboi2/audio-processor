@@ -31,15 +31,17 @@ const streamToBuffer = async (stream) => {
     return Buffer.concat(chunks);
 };
 
-// Function to convert MP3 to OGG using FFmpeg
+// Function to convert MP3 to OGG using FFmpeg with Vorbis codec
 async function convertToOgg(inputBuffer, outputPath) {
     // Write the input buffer to a temporary MP3 file
     const tempInputPath = 'temp_input.mp3';
     await writeFile(tempInputPath, inputBuffer);
 
-    // Run FFmpeg to convert the file to OGG
+    // Run FFmpeg with your custom command to convert to Vorbis/OGG format
+    const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 3 ${outputPath}`;
+
     return new Promise((resolve, reject) => {
-        exec(`ffmpeg -i ${tempInputPath} -codec:a libvorbis ${outputPath}`, (error, stdout, stderr) => {
+        exec(ffmpegCommand, (error, stdout, stderr) => {
             if (error) {
                 reject(`FFmpeg error: ${stderr}`);
             } else {
@@ -83,7 +85,7 @@ async function checkForNewFiles() {
 
                 console.log(`Downloaded file: ${fileName}`);
 
-                // Convert the MP3 to OGG
+                // Convert the MP3 to OGG with custom FFmpeg parameters
                 const oggFileName = fileName.replace('.mp3', '.ogg');
                 const oggFilePath = path.join(__dirname, oggFileName);
 
@@ -116,4 +118,3 @@ setInterval(checkForNewFiles, 5 * 60 * 1000);
 
 // Run it once on startup
 checkForNewFiles();
-
