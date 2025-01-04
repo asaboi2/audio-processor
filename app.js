@@ -1,7 +1,8 @@
 const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('fs');
 const path = require('path');
-const { Readable } = require('stream');
+const { exec } = require('child_process');
+const { writeFile } = require('fs').promises;
 
 // Set up Spaces credentials
 const s3 = new S3Client({
@@ -30,6 +31,25 @@ const streamToBuffer = async (stream) => {
     return Buffer.concat(chunks);
 };
 
+// Function to convert MP3 to OGG using FFmpeg
+async function convertToOgg(inputBuffer, outputPath) {
+    // Write the input buffer to a temporary MP3 file
+    const tempInputPath = 'temp_input.mp3';
+    await writeFile(tempInputPath, inputBuffer);
+
+    // Run FFmpeg to convert the file to OGG
+    return new Promise((resolve, reject) => {
+        exec(`ffmpeg -i ${tempInputPath} -codec:a libvorbis ${outputPath}`, (error, stdout, stderr) => {
+            if (error) {
+                reject(`FFmpeg error: ${stderr}`);
+            } else {
+                console.log(`FFmpeg output: ${stdout}`);
+                resolve();
+            }
+        });
+    });
+}
+
 // Function to check for new MP3 files and convert them to OGG
 async function checkForNewFiles() {
     console.log("Checking for new MP3 files...");
@@ -55,7 +75,7 @@ async function checkForNewFiles() {
                 console.log(`Processing file: ${fileName}`);
                 processedFiles.add(file.Key); // Mark file as processed
 
-                // Download the file
+                // Download the MP3 file from the Space
                 const mp3Data = await s3.send(new GetObjectCommand({
                     Bucket: bucketName,
                     Key: file.Key,
@@ -63,15 +83,15 @@ async function checkForNewFiles() {
 
                 console.log(`Downloaded file: ${fileName}`);
 
-                // Simulate conversion
+                // Convert the MP3 to OGG
                 const oggFileName = fileName.replace('.mp3', '.ogg');
                 const oggFilePath = path.join(__dirname, oggFileName);
 
-                fs.writeFileSync(oggFilePath, await streamToBuffer(mp3Data.Body));
+                await convertToOgg(await streamToBuffer(mp3Data.Body), oggFilePath);
 
                 console.log(`Converted ${fileName} to ${oggFileName}`);
 
-                // Upload the OGG file to the output folder
+                // Upload the OGG file to the output folder in the Space
                 const oggFile = fs.readFileSync(oggFilePath);
                 await s3.send(new PutObjectCommand({
                     Bucket: bucketName,
@@ -96,3 +116,4 @@ setInterval(checkForNewFiles, 5 * 60 * 1000);
 
 // Run it once on startup
 checkForNewFiles();
+
