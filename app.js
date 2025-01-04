@@ -65,7 +65,7 @@ async function convertToOgg(inputBuffer, outputPath) {
     });
 }
 
-// Function to check for new MP3 files every 2 hours
+// Function to continuously check for new MP3 files
 async function checkForNewFiles() {
     console.log("Checking for new MP3 files...");
 
@@ -136,10 +136,10 @@ async function checkForNewFiles() {
         console.error("Error processing files:", err);
     }
 
-    // Schedule the next check in 2 hours (7200 seconds)
-    console.log("Next check scheduled in 2 hours...");
-    setTimeout(checkForNewFiles, 2 * 60 * 60 * 1000);
+    // Immediately check again for new files
+    setImmediate(checkForNewFiles);
 }
 
-// Start the first check
+// Start the continuous file check
 checkForNewFiles();
+
