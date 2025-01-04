@@ -1,13 +1,16 @@
-const AWS = require('aws-sdk');
+const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('fs');
 const path = require('path');
+const { Readable } = require('stream');
 
 // Set up Spaces credentials
-const spacesEndpoint = new AWS.Endpoint('nyc3.digitaloceanspaces.com');
-const s3 = new AWS.S3({
-    endpoint: spacesEndpoint,
-    accessKeyId: process.env.SPACES_KEY,
-    secretAccessKey: process.env.SPACES_SECRET,
+const s3 = new S3Client({
+    region: 'nyc3',
+    endpoint: 'https://nyc3.digitaloceanspaces.com',
+    credentials: {
+        accessKeyId: process.env.SPACES_KEY,
+        secretAccessKey: process.env.SPACES_SECRET,
+    },
 });
 
 // Folder paths in the Space
@@ -15,18 +18,25 @@ const bucketName = 'audio-uploads-questworks';
 const inputFolder = 'mp3/';
 const outputFolder = 'ogg/';
 
+// Function to stream file from Spaces to local
+const streamToBuffer = async (stream) => {
+    const chunks = [];
+    for await (const chunk of stream) {
+        chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+};
+
 // Function to check for new MP3 files and convert them to OGG
 async function checkForNewFiles() {
     console.log("Checking for new MP3 files...");
 
     try {
         // List objects in the input folder
-        const data = await s3
-            .listObjectsV2({
-                Bucket: bucketName,
-                Prefix: inputFolder,
-            })
-            .promise();
+        const data = await s3.send(new ListObjectsV2Command({
+            Bucket: bucketName,
+            Prefix: inputFolder,
+        }));
 
         if (!data.Contents || data.Contents.length === 0) {
             console.log("No new files found.");
@@ -39,31 +49,29 @@ async function checkForNewFiles() {
                 console.log(`Processing file: ${fileName}`);
 
                 // Download the file
-                const mp3File = await s3
-                    .getObject({
-                        Bucket: bucketName,
-                        Key: file.Key,
-                    })
-                    .promise();
+                const mp3Data = await s3.send(new GetObjectCommand({
+                    Bucket: bucketName,
+                    Key: file.Key,
+                }));
+
+                const mp3Buffer = await streamToBuffer(mp3Data.Body);
 
                 // Simulate conversion (replace with actual conversion logic)
                 const oggFileName = fileName.replace('.mp3', '.ogg');
                 const oggFilePath = path.join(__dirname, oggFileName);
 
-                fs.writeFileSync(oggFilePath, mp3File.Body);
+                fs.writeFileSync(oggFilePath, mp3Buffer);
 
                 console.log(`Converted ${fileName} to ${oggFileName}`);
 
                 // Upload the OGG file to the output folder
                 const oggFile = fs.readFileSync(oggFilePath);
-                await s3
-                    .putObject({
-                        Bucket: bucketName,
-                        Key: `${outputFolder}${oggFileName}`,
-                        Body: oggFile,
-                        ContentType: 'audio/ogg',
-                    })
-                    .promise();
+                await s3.send(new PutObjectCommand({
+                    Bucket: bucketName,
+                    Key: `${outputFolder}${oggFileName}`,
+                    Body: oggFile,
+                    ContentType: 'audio/ogg',
+                }));
 
                 console.log(`Uploaded ${oggFileName} to ${outputFolder}`);
 
