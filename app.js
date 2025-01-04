@@ -80,7 +80,9 @@ async function checkForNewFiles() {
         }
 
         console.log("Files found in /mp3 folder:");
-        data.Contents.forEach(file => console.log(file.Key));
+        data.Contents
+            .filter(file => file.Key.endsWith('.mp3'))
+            .forEach(file => console.log(file.Key));
 
         for (const file of data.Contents) {
             const fileName = path.basename(file.Key);
