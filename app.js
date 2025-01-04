@@ -37,17 +37,28 @@ async function convertToOgg(inputBuffer, outputPath) {
     const tempInputPath = 'temp_input.mp3';
     await writeFile(tempInputPath, inputBuffer);
 
-    // Run FFmpeg with your custom command to convert to Vorbis/OGG format
-    const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 3 ${outputPath}`;
+    console.log(`Starting FFmpeg conversion for: ${tempInputPath}`);
+
+    // Use the updated FFmpeg command with lower quality
+    const ffmpegCommand = `ffmpeg -i ${tempInputPath} -vn -map_metadata -1 -ac 1 -c:a libvorbis -q:a 0.5 ${outputPath}`;
 
     return new Promise((resolve, reject) => {
-        exec(ffmpegCommand, (error, stdout, stderr) => {
+        const process = exec(ffmpegCommand, (error, stdout, stderr) => {
             if (error) {
-                reject(`FFmpeg error: ${stderr}`);
+                console.error(`FFmpeg error: ${stderr}`);
+                reject(`Conversion failed: ${stderr}`);
             } else {
                 console.log(`FFmpeg output: ${stdout}`);
                 resolve();
             }
+        });
+
+        process.stdout.on('data', (data) => {
+            console.log(`FFmpeg: ${data}`);
+        });
+
+        process.stderr.on('data', (data) => {
+            console.error(`FFmpeg Error: ${data}`);
         });
     });
 }
