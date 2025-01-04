@@ -18,6 +18,9 @@ const bucketName = 'audio-uploads-questworks';
 const inputFolder = 'mp3/';
 const outputFolder = 'ogg/';
 
+// In-memory cache to track processed files
+const processedFiles = new Set();
+
 // Function to stream file from Spaces to local
 const streamToBuffer = async (stream) => {
     const chunks = [];
@@ -48,8 +51,9 @@ async function checkForNewFiles() {
 
         for (const file of data.Contents) {
             const fileName = path.basename(file.Key);
-            if (fileName.endsWith('.mp3')) {
+            if (fileName.endsWith('.mp3') && !processedFiles.has(file.Key)) {
                 console.log(`Processing file: ${fileName}`);
+                processedFiles.add(file.Key); // Mark file as processed
 
                 // Download the file
                 const mp3Data = await s3.send(new GetObjectCommand({
