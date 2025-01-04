@@ -1,12 +1,11 @@
-const AWS = require("@aws-sdk/client-s3");
+const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const axios = require("axios");
 const fs = require("fs");
 const { exec } = require("child_process");
 
 // Configuration
-const spacesEndpoint = new AWS.Endpoint("nyc3.digitaloceanspaces.com");
-const s3 = new AWS.S3({
-    endpoint: spacesEndpoint,
+const s3 = new S3Client({
+    endpoint: "https://nyc3.digitaloceanspaces.com",
     region: "nyc3",
     credentials: {
         accessKeyId: process.env.SPACES_KEY,
@@ -22,7 +21,8 @@ const webhookUrl = "https://hooks.zapier.com/hooks/catch/20789352/282fw24/";
 const checkForNewFiles = async () => {
     try {
         console.log("[audio-processor] Checking for new MP3 files...");
-        const files = await s3.listObjectsV2({ Bucket: bucketName, Prefix: `${mp3Folder}/` });
+        const command = new ListObjectsV2Command({ Bucket: bucketName, Prefix: `${mp3Folder}/` });
+        const files = await s3.send(command);
 
         if (!files.Contents || files.Contents.length === 0) {
             console.log("[audio-processor] No new MP3 files found.");
@@ -35,16 +35,19 @@ const checkForNewFiles = async () => {
 
             console.log(`[audio-processor] Processing file: ${fileName}`);
 
-            const downloadParams = {
+            const downloadCommand = new GetObjectCommand({
                 Bucket: bucketName,
                 Key: file.Key
-            };
+            });
+            const fileData = await s3.send(downloadCommand);
 
             const downloadPath = `temp_input.mp3`;
             const uploadPath = `temp_output.ogg`;
 
-            const fileData = await s3.getObject(downloadParams);
-            fs.writeFileSync(downloadPath, fileData.Body);
+            const stream = fileData.Body;
+            const writeStream = fs.createWriteStream(downloadPath);
+            stream.pipe(writeStream);
+            await new Promise(resolve => writeStream.on("finish", resolve));
 
             console.log(`[audio-processor] Downloaded file: ${fileName}`);
 
@@ -60,21 +63,21 @@ const checkForNewFiles = async () => {
                 console.log(`[audio-processor] Converted ${fileName} to OGG`);
 
                 // Upload the OGG file to Spaces
-                const uploadParams = {
+                const uploadCommand = new PutObjectCommand({
                     Bucket: bucketName,
                     Key: `${oggFolder}/${fileName.replace(".mp3", ".ogg")}`,
                     Body: fs.readFileSync(uploadPath),
                     ContentType: "audio/ogg"
-                };
+                });
 
-                await s3.putObject(uploadParams);
+                await s3.send(uploadCommand);
                 console.log(`[audio-processor] Uploaded ${fileName.replace(".mp3", ".ogg")} to ${oggFolder}/`);
 
                 // Send webhook to Zapier
                 try {
                     await axios.post(webhookUrl, {
                         filename: fileName.replace(".mp3", ".ogg"),
-                        downloadUrl: `https://${bucketName}.${spacesEndpoint.hostname}/${oggFolder}/${fileName.replace(".mp3", ".ogg")}`
+                        downloadUrl: `https://${bucketName}.nyc3.digitaloceanspaces.com/${oggFolder}/${fileName.replace(".mp3", ".ogg")}`
                     });
                     console.log(`[audio-processor] Webhook sent for: ${fileName.replace(".mp3", ".ogg")}`);
                 } catch (err) {
