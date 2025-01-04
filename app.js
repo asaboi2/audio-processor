@@ -1,34 +1,32 @@
 const fs = require('fs');
 const path = require('path');
 
-// Simulate the MP3 to OGG conversion process
+// Function to simulate file conversion (replace with your actual logic)
 function convertMP3toOGG() {
     console.log("Checking for new MP3 files...");
 
-    // Example of a simple file check (customize this for your use case)
+    // Example directories (customize for your setup)
     const mp3Folder = path.join(__dirname, 'mp3s');
     const oggFolder = path.join(__dirname, 'ogg');
 
-    if (!fs.existsSync(mp3Folder)) {
-        fs.mkdirSync(mp3Folder);
-    }
-    if (!fs.existsSync(oggFolder)) {
-        fs.mkdirSync(oggFolder);
-    }
+    // Ensure folders exist
+    if (!fs.existsSync(mp3Folder)) fs.mkdirSync(mp3Folder);
+    if (!fs.existsSync(oggFolder)) fs.mkdirSync(oggFolder);
 
+    // Simulate conversion
     fs.readdir(mp3Folder, (err, files) => {
         if (err) throw err;
 
         files.forEach(file => {
             if (path.extname(file) === '.mp3') {
                 console.log(`Converting ${file} to OGG...`);
-                // Simulate conversion by renaming the file (replace with actual conversion logic)
+                const newFile = file.replace('.mp3', '.ogg');
                 fs.rename(
                     path.join(mp3Folder, file),
-                    path.join(oggFolder, file.replace('.mp3', '.ogg')),
+                    path.join(oggFolder, newFile),
                     err => {
                         if (err) throw err;
-                        console.log(`Uploaded ${file.replace('.mp3', '.ogg')} to /ogg`);
+                        console.log(`Uploaded ${newFile} to /ogg`);
                     }
                 );
             }
@@ -36,9 +34,8 @@ function convertMP3toOGG() {
     });
 }
 
-// Run the conversion every 5 minutes
+// Run the function every 5 minutes
 setInterval(convertMP3toOGG, 5 * 60 * 1000);
 
-// Initial run
+// Run it once immediately
 convertMP3toOGG();
-
